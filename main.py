@@ -32,10 +32,13 @@ HEADERS = {
 def strip_html(text):
     return re.sub(r'<[^>]*>', '', text)
 
-def send_telegram_message(message_text):
-    if not BOT_TOKEN or not CHAT_ID: return False
+def send_telegram_message(message_text, target_chat_id=None):
+    # Agar target_chat_id diya hai toh uspar bhejo, warna default CHAT_ID par
+    chat_to_use = target_chat_id if target_chat_id else CHAT_ID
+    if not BOT_TOKEN or not chat_to_use: return False
+    
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": message_text, "parse_mode": "HTML", "disable_web_page_preview": True}
+    payload = {"chat_id": chat_to_use, "text": message_text, "parse_mode": "HTML", "disable_web_page_preview": True}
     try:
         res = requests.post(url, json=payload, timeout=10)
         if res.status_code != 200:
@@ -97,7 +100,8 @@ def process_telegram_commands(state, config):
     if not updates: return state, config
     
     series_list = config.get("series", [])
-    processed_cmds = set() # Anti-spam memory
+    processed_cmds = set()
+    unauthorized_notified = set() # Store notified unauthorized users per run
     
     for update in updates:
         update_id = update["update_id"]
@@ -106,7 +110,15 @@ def process_telegram_commands(state, config):
         chat_id = str(message.get("chat", {}).get("id", ""))
         text = message.get("text", "").strip()
 
-        if not text or chat_id != str(CHAT_ID): continue
+        if not text: continue
+
+        # Unauthorized chat handler
+        if chat_id != str(CHAT_ID):
+            if chat_id not in unauthorized_notified:
+                unauth_msg = "This bot is private. To use it, fork the project and run your own copy: https://github.com/aakkiie/youtube-series-notifier"
+                send_telegram_message(unauth_msg, target_chat_id=chat_id)
+                unauthorized_notified.add(chat_id)
+            continue
 
         if text.startswith("/start"):
             if "/start" in processed_cmds: continue
@@ -251,7 +263,6 @@ def process_telegram_commands(state, config):
     state["last_update_id"] = last_update_id
     config["series"] = series_list
     
-    # FIX: Force Telegram to drop read messages immediately from its server queue.
     if last_update_id > 0 and BOT_TOKEN:
         try:
             requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?offset={last_update_id + 1}", timeout=5)
