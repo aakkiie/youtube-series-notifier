@@ -2,9 +2,8 @@ name: YouTube Channel Tracker
 
 on:
   schedule:
-    # Har 30 minute mein automatically check karega
     - cron: '*/30 * * * *'
-  workflow_dispatch: # Isse aap manually bhi jab chahe test run kar sakte hain
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -13,30 +12,25 @@ jobs:
   check-feed:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Install Dependencies
-        run: |
-          pip install -r requirements.txt
+      - run: pip install -r requirements.txt
 
       - name: Run Tracker Script
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: |
-          python main.py
+        run: python main.py
 
-      - name: Commit and Push Updated Tracker
+      - name: Commit State
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add last_video.txt || true
-          git commit -m "Update last video ID [skip ci]" || exit 0
+          git config --global user.name "actions-bot"
+          git config --global user.email "bot@github.com"
+          git add state.json || true
+          git commit -m "Update state [skip ci]" || exit 0
           git push || true
