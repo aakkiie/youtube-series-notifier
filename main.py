@@ -48,11 +48,12 @@ def get_ai_message(title, link):
                   f"Mast emojis ka use karo. Markdown stars (**) use mat karna, sirf HTML <b> tags use karna kisi word ko bold karne ke liye. "
                   f"Message ke end mein likho: 'Dekho abhi: {link}'")
         
-        response = client.models.generate_content(
-            model='gemini-2.0-flash', 
-            contents=prompt
+        # Error log ke hisaab se Interactions API aur naya model use kar rahe hain
+        interaction = client.interactions.create(
+            model='gemini-3.8-flash', 
+            input=prompt
         )
-        return response.text.strip()
+        return interaction.output_text.strip()
     except Exception as e:
         print(f"Gemini AI error: {e}. Fallback message use kar rahe hain.")
         return f"🎬 <b>Nayi Video Update!</b>\n\n📌 <b>{title}</b>\n\n🔗 {link}"
