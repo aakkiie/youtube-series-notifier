@@ -86,7 +86,6 @@ def get_telegram_updates(last_update_id):
     return []
 
 def process_telegram_commands(state, config):
-    # FIX 3: Reset last_update_id if Bot Token changes
     if BOT_TOKEN and ":" in BOT_TOKEN:
         current_bot_id = BOT_TOKEN.split(":")[0]
         if state.get("bot_id") != current_bot_id:
@@ -98,6 +97,7 @@ def process_telegram_commands(state, config):
     if not updates: return state, config
     
     series_list = config.get("series", [])
+    processed_cmds = set() # Anti-spam memory
     
     for update in updates:
         update_id = update["update_id"]
@@ -109,6 +109,8 @@ def process_telegram_commands(state, config):
         if not text or chat_id != str(CHAT_ID): continue
 
         if text.startswith("/start"):
+            if "/start" in processed_cmds: continue
+            processed_cmds.add("/start")
             welcome_msg = (
                 "👋 <b>Welcome to YouTube Series Notifier!</b> 📺\n\n"
                 "Main aapke favourite YouTube series ke naye episodes track karke yahan notify karunga.\n\n"
@@ -124,6 +126,8 @@ def process_telegram_commands(state, config):
             send_telegram_message(welcome_msg)
             
         elif text.startswith("/list"):
+            if "/list" in processed_cmds: continue
+            processed_cmds.add("/list")
             if not series_list:
                 send_telegram_message("Abhi koi bhi series track nahi ho rahi hai. Add karne ke liye /track use karein.")
             else:
@@ -134,8 +138,9 @@ def process_telegram_commands(state, config):
                 
         elif text.startswith("/track"):
             parts = text.split(" ", 1)
-            # FIX 6: Bare /track command validation
             if len(parts) < 2 or not parts[1].strip():
+                if "/track_help" in processed_cmds: continue
+                processed_cmds.add("/track_help")
                 send_telegram_message("❌ <b>Sahi format:</b>\n1. <code>/track &lt;video_link&gt;</code>\n2. <code>/track @handle Series Name</code>")
                 continue
                 
@@ -152,17 +157,14 @@ def process_telegram_commands(state, config):
                         author_url = data.get("author_url", "")
                         channel_ident = author_url.split("/")[-1] if "/" in author_url else data.get("author_name", "")
                         
-                        # FIX 2: Added \b before episode|ep|part...
                         cleaned_title = re.sub(r'(?i)\s*\b(?:episode|ep|part|chapter|ch)\.?\s*#?\s*\d+.*$', '', title).strip()
                         cleaned_title = re.sub(r'(?i)\s*s\d+\s*e\d+.*$', '', cleaned_title).strip()
                         cleaned_title = re.sub(r'(?i)\s*[-|:]\s*$', '', cleaned_title).strip()
                         
-                        # FIX 2: If cleaned name is empty
                         if not cleaned_title:
                             send_telegram_message("❌ Series ka naam extract nahi ho paaya. Kripya manual format use karein:\n<code>/track @handle Series Name</code>")
                             continue
                             
-                        # FIX 1: Extract episode number from linked video's title to set as baseline
                         ep_num_from_link = extract_episode_number(title) or 0
                         
                         is_dup = any(s.get("name", "").lower() == cleaned_title.lower() for s in series_list)
@@ -248,11 +250,18 @@ def process_telegram_commands(state, config):
 
     state["last_update_id"] = last_update_id
     config["series"] = series_list
+    
+    # FIX: Force Telegram to drop read messages immediately from its server queue.
+    if last_update_id > 0 and BOT_TOKEN:
+        try:
+            requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?offset={last_update_id + 1}", timeout=5)
+        except Exception:
+            pass
+            
     return state, config
 
 def get_ai_caption(series_name, ep_num, title, link):
     ep_label = f"Episode {ep_num}" if ep_num else "Next Part"
-    # FIX 6: HTML escape for rich formatting
     base_header = f"🔥 <b>{html.escape(series_name)}</b> ({ep_label})\n🎬 <b>{html.escape(title)}</b>\n\n"
     base_footer = f"\n\n👉 Dekho abhi: {link}"
     ai_line = "Naya episode release ho gaya hai! Abhi jaakar dekho."
@@ -338,7 +347,6 @@ def extract_episode_number(text):
     if not text: return None
     se_match = re.search(r'(?i)\bs\d+\s*e(\d+)\b', text)
     if se_match: return int(se_match.group(1))
-    # FIX 2: Added \b before episode
     word_match = re.search(r'(?i)\b(?:episode|ep|part|chapter|ch)\.?\s*#?\s*(\d+)\b', text)
     if word_match: return int(word_match.group(1))
     hash_match = re.search(r'(?i)(?:#|(?<=\b)E)(\d+)\b', text)
@@ -348,7 +356,6 @@ def extract_episode_number(text):
 def fetch_transcript_snippet(video_id):
     if not YouTubeTranscriptApi: return ""
     try:
-        # FIX 4: Reverted to old syntax for version 0.6.3
         transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['en', 'hi', 'ja'])
         return " ".join([item['text'] for item in transcript_list[:15]])[:400]
     except Exception as e:
@@ -385,7 +392,6 @@ def check_video_matches_series(video, series, settings):
     for inc in series.get("include_keywords", []):
         if inc.strip() and inc.strip().lower() not in combined_text: return False, None
         
-    # FIX 1: Only check the title for the episode number to avoid vague description false positives
     ep_num = extract_episode_number(video["title"])
     last_watched = series.get("last_watched_episode", 0)
     
@@ -426,7 +432,6 @@ def main():
         
         videos = fetch_channel_feed(channel_id)
         
-        # FIX 5: Only save last_check_time if check_interval is > 30 mins
         for s in series_configs: 
             if s.get("check_interval", 1800) > 1800:
                 s["last_check_time"] = current_time
@@ -449,7 +454,6 @@ def main():
                     caption = get_ai_caption(s["name"], ep_num, vid["title"], vid["link"])
                     send_telegram_alert(thumbnail_url, caption)
                     
-                    # FIX 1: Set last_watched_episode to the highest alerted episode
                     if ep_num:
                         s["last_watched_episode"] = max(s.get("last_watched_episode", 0), int(ep_num))
                     break
