@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import sys
 import xml.etree.ElementTree as ET
 import requests
@@ -11,6 +12,10 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 CONFIG_FILE = "config.json"
 STATE_FILE = "state.json"
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+}
 
 def send_telegram_message(message):
     if not BOT_TOKEN or not CHAT_ID:
@@ -67,12 +72,48 @@ def save_json(filepath, data):
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
+def resolve_to_channel_id(identifier):
+    identifier = identifier.strip()
+    # Agar pehle se hi UC... channel ID hai
+    if identifier.startswith("UC") and len(identifier) == 24:
+        return identifier
+
+    # Handle banayein
+    handle = identifier if identifier.startswith("@") else f"@{identifier}"
+    url = f"https://www.youtube.com/{handle}"
+    print(f"Resolving channel ID for handle: {handle}...")
+    try:
+        res = requests.get(url, headers=HEADERS, timeout=15)
+        if res.status_code != 200:
+            print(f"Failed to load channel page {url}: Status {res.status_code}")
+            return None
+
+        # Look for channel ID in page meta tags & scripts
+        patterns = [
+            r'href="https://www.youtube.com/channel/(UC[\w-]{22})"',
+            r'"externalId":"(UC[\w-]{22})"',
+            r'"browseId":"(UC[\w-]{22})"',
+            r'itemprop="identifier" content="(UC[\w-]{22})"'
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, res.text)
+            if match:
+                channel_id = match.group(1)
+                print(f"Found Channel ID: {channel_id}")
+                return channel_id
+
+        print(f"Could not extract Channel ID for {handle}")
+        return None
+    except Exception as e:
+        print(f"Error resolving handle {handle}: {e}")
+        return None
+
 def fetch_channel_feed(channel_id):
     url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
     try:
-        res = requests.get(url, timeout=15)
+        res = requests.get(url, headers=HEADERS, timeout=15)
         if res.status_code != 200:
-            print(f"Failed to fetch RSS for channel {channel_id}: Status {res.status_code}")
+            print(f"Failed to fetch RSS for {channel_id}: Status {res.status_code}")
             return []
         root = ET.fromstring(res.content)
         ns = {
@@ -97,6 +138,10 @@ def fetch_channel_feed(channel_id):
         return []
 
 def main():
+    # Make sure state file exists right away
+    if not os.path.exists(STATE_FILE):
+        save_json(STATE_FILE, {})
+
     config = load_json(CONFIG_FILE, {"series": []})
     series_list = config.get("series", [])
     if not series_list:
@@ -105,29 +150,34 @@ def main():
 
     state = load_json(STATE_FILE, {})
 
-    unique_channels = {}
+    # Collect unique channel identifiers (can be @handle or UC... id)
+    unique_identifiers = {}
     for s in series_list:
-        cid = s.get("channel_id", "").strip()
-        if cid:
-            unique_channels.setdefault(cid, []).append(s)
+        ident = s.get("channel") or s.get("channel_id") or ""
+        ident = ident.strip()
+        if ident:
+            unique_identifiers.setdefault(ident, []).append(s)
 
-    for channel_id in unique_channels.keys():
-        print(f"\nChecking channel: {channel_id}")
-        videos = fetch_channel_feed(channel_id)
-        if not videos:
-            print(f"No videos found or feed failed for {channel_id}")
+    for ident in unique_identifiers.keys():
+        channel_id = resolve_to_channel_id(ident)
+        if not channel_id:
+            print(f"Skipping {ident} because Channel ID could not be determined.")
             continue
 
-        # Pehli baar run ho raha hai toh current videos save karo bina alert bheje
+        print(f"\nChecking RSS feed for: {channel_id} ({ident})")
+        videos = fetch_channel_feed(channel_id)
+        if not videos:
+            print(f"No videos found or feed empty for {channel_id}")
+            continue
+
+        # First run seed check
         if channel_id not in state:
-            print(f"First run for channel {channel_id}. Seeding {len(videos)} videos without alert.")
+            print(f"First run for {channel_id}. Seeding {len(videos)} videos without alert.")
             state[channel_id] = [v["id"] for v in videos]
             save_json(STATE_FILE, state)
             continue
 
         seen_ids = set(state.get(channel_id, []))
-        
-        # YouTube feed newest-first deta hai, reversed() se hum oldest-first process karenge
         new_videos = [v for v in reversed(videos) if v["id"] not in seen_ids]
 
         if not new_videos:
@@ -140,7 +190,6 @@ def main():
             msg = get_ai_message(vid["title"], vid["link"])
             send_telegram_message(msg)
             
-            # State update karke turant save karte hain taaki crash hone par bhi repeat na ho
             state[channel_id].append(vid["id"])
             save_json(STATE_FILE, state)
 
