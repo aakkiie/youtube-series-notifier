@@ -40,15 +40,21 @@ def send_telegram_message(message):
         print(f"Telegram API call error: {e}")
         return False
 
-def get_ai_message(title, link):
-    fallback_msg = f"<b>Nayi Video Update!</b>\n\n<b>{title}</b>\n\nDekho abhi: {link}"
+def get_ai_message(series_name, ep_num, title, link):
+    fallback_msg = (
+        f"🔥 <b>Naya Episode Alert!</b>\n\n"
+        f"📺 <b>{series_name}</b> (Episode {ep_num})\n"
+        f"🎬 <b>{title}</b>\n\n"
+        f"Dekho abhi: {link}"
+    )
     if not GEMINI_API_KEY:
         return fallback_msg
     try:
         client = genai.Client(api_key=GEMINI_API_KEY)
         prompt = (
-            f"Batao ki ek nayi YouTube video aayi hai jiska title hai '{title}'. "
-            f"Ek chota, super exciting Telegram message likho Hinglish mein apni taraf se. "
+            f"Batao ki series '{series_name}' ka naya episode/part {ep_num} aa gaya hai! "
+            f"Video ka title hai: '{title}'. "
+            f"Ek chota, super exciting Telegram alert message likho Hinglish mein. "
             f"Mast emojis ka use karo. Markdown stars (**) use mat karna, sirf HTML <b> tags use karna. "
             f"Message ke end mein likho: 'Dekho abhi: {link}'"
         )
@@ -74,11 +80,9 @@ def save_json(filepath, data):
 
 def resolve_to_channel_id(identifier):
     identifier = identifier.strip()
-    # Agar pehle se hi UC... channel ID hai
     if identifier.startswith("UC") and len(identifier) == 24:
         return identifier
 
-    # Handle banayein
     handle = identifier if identifier.startswith("@") else f"@{identifier}"
     url = f"https://www.youtube.com/{handle}"
     print(f"Resolving channel ID for handle: {handle}...")
@@ -88,7 +92,6 @@ def resolve_to_channel_id(identifier):
             print(f"Failed to load channel page {url}: Status {res.status_code}")
             return None
 
-        # Look for channel ID in page meta tags & scripts
         patterns = [
             r'href="https://www.youtube.com/channel/(UC[\w-]{22})"',
             r'"externalId":"(UC[\w-]{22})"',
@@ -118,7 +121,8 @@ def fetch_channel_feed(channel_id):
         root = ET.fromstring(res.content)
         ns = {
             "atom": "http://www.w3.org/2005/Atom",
-            "yt": "http://www.youtube.com/xml/schemas/2015"
+            "yt": "http://www.youtube.com/xml/schemas/2015",
+            "media": "http://search.yahoo.com/mrss/"
         }
         entries = root.findall("atom:entry", ns)
         videos = []
@@ -126,19 +130,79 @@ def fetch_channel_feed(channel_id):
             video_id_el = entry.find("yt:videoId", ns)
             title_el = entry.find("atom:title", ns)
             link_el = entry.find("atom:link", ns)
+            
+            # Extract description from media:group
+            desc = ""
+            media_group = entry.find("media:group", ns)
+            if media_group is not None:
+                desc_el = media_group.find("media:description", ns)
+                if desc_el is not None and desc_el.text:
+                    desc = desc_el.text.strip()
+
             if video_id_el is not None and title_el is not None and link_el is not None:
                 videos.append({
                     "id": video_id_el.text.strip(),
                     "title": title_el.text.strip() if title_el.text else "Untitled",
-                    "link": link_el.attrib.get("href", "")
+                    "link": link_el.attrib.get("href", ""),
+                    "description": desc
                 })
         return videos
     except Exception as e:
         print(f"Error fetching/parsing feed for {channel_id}: {e}")
         return []
 
+def extract_episode_number(text):
+    if not text:
+        return None
+    
+    # 1. Season/Episode format: S2E3 or S02E05
+    se_match = re.search(r'(?i)\bs\d+\s*e(\d+)\b', text)
+    if se_match:
+        return int(se_match.group(1))
+
+    # 2. Episode / Part / Chapter formats: "Part 5", "Ep 5", "Episode 05", "Chapter 5", "Ch. 5"
+    word_match = re.search(r'(?i)\b(?:episode|ep|part|chapter|ch)\.?\s*#?\s*(\d+)\b', text)
+    if word_match:
+        return int(word_match.group(1))
+
+    # 3. Hash or direct E format: "#5", "#05", "E5"
+    hash_match = re.search(r'(?i)(?:#|(?<=\b)E)(\d+)\b', text)
+    if hash_match:
+        return int(hash_match.group(1))
+
+    return None
+
+def check_video_matches_series(video, series):
+    combined_text = f"{video['title']} {video['description']}".lower()
+
+    # Exclude keywords check
+    for ex in series.get("exclude_keywords", []):
+        if ex.strip() and ex.strip().lower() in combined_text:
+            print(f"  -> Discarded by exclude keyword '{ex}'")
+            return False, None
+
+    # Include keywords check (all include keywords must match)
+    for inc in series.get("include_keywords", []):
+        if inc.strip() and inc.strip().lower() not in combined_text:
+            return False, None
+
+    # Episode extraction: pehle title check karo, nahi mile toh description
+    ep_num = extract_episode_number(video["title"])
+    if ep_num is None:
+        ep_num = extract_episode_number(video["description"])
+
+    if ep_num is None:
+        print(f"  -> Keywords matched, but no episode number detected in '{video['title']}'")
+        return False, None
+
+    last_watched = series.get("last_watched_episode", 0)
+    if ep_num <= last_watched:
+        print(f"  -> Detected Ep {ep_num} <= last watched {last_watched}. Skipping.")
+        return False, None
+
+    return True, ep_num
+
 def main():
-    # Make sure state file exists right away
     if not os.path.exists(STATE_FILE):
         save_json(STATE_FILE, {})
 
@@ -150,18 +214,18 @@ def main():
 
     state = load_json(STATE_FILE, {})
 
-    # Collect unique channel identifiers (can be @handle or UC... id)
-    unique_identifiers = {}
+    # Channel identification grouping
+    channel_to_series = {}
     for s in series_list:
         ident = s.get("channel") or s.get("channel_id") or ""
         ident = ident.strip()
         if ident:
-            unique_identifiers.setdefault(ident, []).append(s)
+            channel_to_series.setdefault(ident, []).append(s)
 
-    for ident in unique_identifiers.keys():
+    for ident, series_configs in channel_to_series.items():
         channel_id = resolve_to_channel_id(ident)
         if not channel_id:
-            print(f"Skipping {ident} because Channel ID could not be determined.")
+            print(f"Skipping {ident}: Channel ID unresolvable.")
             continue
 
         print(f"\nChecking RSS feed for: {channel_id} ({ident})")
@@ -170,7 +234,7 @@ def main():
             print(f"No videos found or feed empty for {channel_id}")
             continue
 
-        # First run seed check
+        # First run seed
         if channel_id not in state:
             print(f"First run for {channel_id}. Seeding {len(videos)} videos without alert.")
             state[channel_id] = [v["id"] for v in videos]
@@ -181,15 +245,24 @@ def main():
         new_videos = [v for v in reversed(videos) if v["id"] not in seen_ids]
 
         if not new_videos:
-            print(f"Channel {channel_id} up to date. No new videos.")
+            print(f"Channel {channel_id} is up to date.")
             continue
 
         print(f"Found {len(new_videos)} new video(s) for {channel_id}.")
         for vid in new_videos:
-            print(f"Processing: {vid['title']} ({vid['id']})")
-            msg = get_ai_message(vid["title"], vid["link"])
-            send_telegram_message(msg)
+            print(f"\nEvaluating: '{vid['title']}' ({vid['id']})")
             
+            matched = False
+            for s in series_configs:
+                is_match, ep_num = check_video_matches_series(vid, s)
+                if is_match:
+                    print(f"  MATCH FOUND! Series: {s['name']}, Detected Next Episode: {ep_num}")
+                    msg = get_ai_message(s["name"], ep_num, vid["title"], vid["link"])
+                    send_telegram_message(msg)
+                    matched = True
+                    break
+
+            # Har processed video ko state mein save karenge taaki repeat check na ho
             state[channel_id].append(vid["id"])
             save_json(STATE_FILE, state)
 
