@@ -2,15 +2,21 @@ import os
 import sys
 import requests
 import xml.etree.ElementTree as ET
+import google.generativeai as genai
 
 # GitHub Secrets se credentials fetch honge
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 # Aapke YouTube channel ki ID
 CHANNEL_ID = "UCeBCrzpdqH0qImV2Ir83_lA"
 RSS_URL = f"https://www.youtube.com/feeds/videos.xml?channel_id={CHANNEL_ID}"
 LAST_VIDEO_FILE = "last_video.txt"
+
+# Gemini AI Setup
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 
 def send_telegram_message(message):
     if not BOT_TOKEN or not CHAT_ID:
@@ -32,6 +38,24 @@ def send_telegram_message(message):
             print(f"Message send nahi hua: {response.text}")
     except Exception as e:
         print(f"Telegram API call fail ho gayi: {e}")
+
+def get_ai_message(title, link):
+    if not GEMINI_API_KEY:
+        print("Gemini API key nahi mili, normal message bhej rahe hain.")
+        return f"🎬 <b>Nayi Video Update!</b>\n\n📌 <b>{title}</b>\n\n🔗 {link}"
+    
+    try:
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        prompt = (f"Batao ki ek nayi YouTube video aayi hai jiska title hai '{title}'. "
+                  f"Ek chota, super exciting Telegram message likho Hinglish mein apni taraf se. "
+                  f"Mast emojis ka use karo. Markdown stars (**) use mat karna, sirf HTML <b> tags use karna kisi word ko bold karne ke liye. "
+                  f"Message ke end mein likho: 'Dekho abhi: {link}'")
+        
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    except Exception as e:
+        print(f"Gemini AI error: {e}. Fallback message use kar rahe hain.")
+        return f"🎬 <b>Nayi Video Update!</b>\n\n📌 <b>{title}</b>\n\n🔗 {link}"
 
 def check_latest_video():
     try:
@@ -64,11 +88,9 @@ def check_latest_video():
         # Nayi video milne par alert bhejein
         if video_id != last_id:
             print(f"Nayi video mili: {title} ({video_id})")
-            message = (
-                f"🎬 <b>Nayi Video Update!</b>\n\n"
-                f"📌 <b>{title}</b>\n\n"
-                f"🔗 {link}"
-            )
+            
+            # Yahan hum Gemini AI se message banwa rahe hain
+            message = get_ai_message(title, link)
             send_telegram_message(message)
 
             # Updated video ID file mein save karein
