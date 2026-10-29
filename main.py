@@ -22,53 +22,102 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
 }
 
-def send_telegram_message(message):
+def strip_html(text):
+    return re.sub(r'<[^>]*>', '', text)
+
+def send_telegram_alert(photo_url, caption_html):
     if not BOT_TOKEN or not CHAT_ID:
         print("Error: Telegram credentials missing!")
         return False
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": message,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": False,
-    }
+
+    plain_caption = strip_html(caption_html)
+
+    # Telegram caption limit is strictly 1024 characters
+    if len(caption_html) > 1020:
+        caption_html = caption_html[:1015] + "..."
+    if len(plain_caption) > 1020:
+        plain_caption = plain_caption[:1015] + "..."
+
+    photo_endpoint = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+    message_endpoint = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+
+    # Step 1: Try sending photo with HTML caption
     try:
-        res = requests.post(url, json=payload, timeout=10)
+        res = requests.post(photo_endpoint, json={
+            "chat_id": CHAT_ID,
+            "photo": photo_url,
+            "caption": caption_html,
+            "parse_mode": "HTML"
+        }, timeout=12)
         if res.status_code == 200:
-            print("Telegram alert sent successfully!")
+            print("Telegram photo alert sent successfully with HTML!")
             return True
-        else:
-            print(f"Send failed: {res.text}")
-            return False
+        print(f"sendPhoto HTML failed ({res.status_code}): {res.text}. Retrying as Plain Text...")
     except Exception as e:
-        print(f"Telegram API call error: {e}")
+        print(f"sendPhoto HTML request error: {e}")
+
+    # Step 2: Retry photo with plain text caption (fixes unclosed HTML tags)
+    try:
+        res = requests.post(photo_endpoint, json={
+            "chat_id": CHAT_ID,
+            "photo": photo_url,
+            "caption": plain_caption
+        }, timeout=12)
+        if res.status_code == 200:
+            print("Telegram photo alert sent successfully with Plain Text fallback!")
+            return True
+        print(f"sendPhoto plain failed ({res.status_code}): {res.text}. Retrying with sendMessage...")
+    except Exception as e:
+        print(f"sendPhoto plain request error: {e}")
+
+    # Step 3: Fallback to sendMessage if photo upload failed
+    try:
+        res = requests.post(message_endpoint, json={
+            "chat_id": CHAT_ID,
+            "text": caption_html,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": False
+        }, timeout=10)
+        if res.status_code == 200:
+            print("Telegram message alert sent (sendMessage fallback)!")
+            return True
+    except Exception:
+        pass
+
+    # Final plain text sendMessage attempt
+    try:
+        res = requests.post(message_endpoint, json={
+            "chat_id": CHAT_ID,
+            "text": plain_caption,
+            "disable_web_page_preview": False
+        }, timeout=10)
+        return res.status_code == 200
+    except Exception as e:
+        print(f"All Telegram alert attempts failed: {e}")
         return False
 
-def get_ai_message(series_name, ep_num, title, link):
+def get_ai_caption(series_name, ep_num, title, link):
     ep_label = f"Episode {ep_num}" if ep_num else "Next Part"
-    fallback_msg = (
-        f"🔥 <b>Naya Episode Alert!</b>\n\n"
-        f"📺 <b>{series_name}</b> ({ep_label})\n"
-        f"🎬 <b>{title}</b>\n\n"
-        f"Dekho abhi: {link}"
-    )
-    if not GEMINI_API_KEY:
-        return fallback_msg
-    try:
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        prompt = (
-            f"Batao ki series '{series_name}' ka naya {ep_label} aa gaya hai! "
-            f"Video ka title hai: '{title}'. "
-            f"Ek chota, super exciting Telegram alert message likho Hinglish mein. "
-            f"Mast emojis ka use karo. Markdown stars (**) use mat karna, sirf HTML <b> tags use karna. "
-            f"Message ke end mein likho: 'Dekho abhi: {link}'"
-        )
-        interaction = client.interactions.create(model="gemini-3.8-flash", input=prompt)
-        return interaction.output_text.strip()
-    except Exception as e:
-        print(f"Gemini AI message error: {e}. Using fallback.")
-        return fallback_msg
+    base_header = f"🔥 <b>{series_name}</b> ({ep_label})\n🎬 <b>{title}</b>\n\n"
+    base_footer = f"\n\n👉 Dekho abhi: {link}"
+
+    ai_line = "Naya episode release ho gaya hai! Abhi jaakar dekho."
+    if GEMINI_API_KEY:
+        try:
+            client = genai.Client(api_key=GEMINI_API_KEY)
+            prompt = (
+                f"Series '{series_name}' ka naya {ep_label} YouTube par aaya hai jiska title hai: '{title}'. "
+                "Ek super short (sirf 1-2 lines), exciting Hinglish commentary likho. "
+                "Mast emojis use karo. 150 characters se lamba mat likhna. "
+                "Markdown stars bilkul use mat karna, sirf HTML <b> tags use karna."
+            )
+            interaction = client.interactions.create(model="gemini-3.8-flash", input=prompt)
+            ai_line = interaction.output_text.strip()
+        except Exception as e:
+            print(f"Gemini caption generation error: {e}. Using default text.")
+
+    full_caption = f"{base_header}{ai_line}{base_footer}"
+    return full_caption
 
 def load_json(filepath, default):
     if os.path.exists(filepath):
@@ -182,7 +231,6 @@ def fetch_transcript_snippet(video_id):
         combined_text = " ".join([item['text'] for item in transcript_list[:15]])
         return combined_text[:400]
     except Exception:
-        # YouTube often blocks data-center IPs or captions are disabled; fail silently
         return ""
 
 def ask_gemini_confirmation(video, series, settings):
@@ -192,7 +240,6 @@ def ask_gemini_confirmation(video, series, settings):
     transcript = fetch_transcript_snippet(video["id"])
     last_watched = series.get("last_watched_episode", 0)
 
-    # Prompt with untrusted data isolation
     prompt = (
         "You are an automated YouTube series tracking validator.\n"
         f"Goal: Determine if this video is the NEXT part/episode of the series '{series['name']}'.\n"
@@ -213,7 +260,6 @@ def ask_gemini_confirmation(video, series, settings):
         interaction = client.interactions.create(model="gemini-3.8-flash", input=prompt)
         raw_text = interaction.output_text.strip()
         
-        # Clean potential markdown wrappers
         clean_text = re.sub(r"^```json\s*", "", raw_text, flags=re.MULTILINE)
         clean_text = re.sub(r"^```\s*", "", clean_text, flags=re.MULTILINE)
         clean_text = clean_text.strip()
@@ -225,25 +271,21 @@ def ask_gemini_confirmation(video, series, settings):
         return is_next, det_ep
 
     except Exception as e:
-        print(f"  [AI Validation] Gemini call/parse error: {e}")
+        print(f"  [AI Validation] Gemini call error: {e}")
         fallback_action = settings.get("ai_fallback_on_error", "alert")
         if fallback_action == "alert":
-            print("  [AI Validation] Fallback active: Sending alert despite AI error.")
             return True, None
         else:
-            print("  [AI Validation] Fallback active: Skipping video due to AI error.")
             return False, None
 
 def check_video_matches_series(video, series, settings):
     combined_text = f"{video['title']} {video['description']}".lower()
 
-    # Exclude keywords check
     for ex in series.get("exclude_keywords", []):
         if ex.strip() and ex.strip().lower() in combined_text:
             print(f"  -> Discarded by exclude keyword '{ex}'")
             return False, None
 
-    # Include keywords check
     matched_all_include = True
     for inc in series.get("include_keywords", []):
         if inc.strip() and inc.strip().lower() not in combined_text:
@@ -253,14 +295,12 @@ def check_video_matches_series(video, series, settings):
     if not matched_all_include:
         return False, None
 
-    # Fast Regex episode extraction
     ep_num = extract_episode_number(video["title"])
     if ep_num is None:
         ep_num = extract_episode_number(video["description"])
 
     last_watched = series.get("last_watched_episode", 0)
 
-    # Agar Regex se episode number mil gaya
     if ep_num is not None:
         if ep_num > last_watched:
             return True, ep_num
@@ -268,7 +308,6 @@ def check_video_matches_series(video, series, settings):
             print(f"  -> Detected Ep {ep_num} <= last watched {last_watched}. Skipping.")
             return False, None
 
-    # Agar keywords match huye par episode number regex se nahi mila -> AI Confirmation call
     print("  -> Keyword match found but episode number is unclear. Calling Gemini AI...")
     return ask_gemini_confirmation(video, series, settings)
 
@@ -305,7 +344,6 @@ def main():
             print(f"No videos found or feed empty for {channel_id}")
             continue
 
-        # First run seed
         if channel_id not in state:
             print(f"First run for {channel_id}. Seeding {len(videos)} videos without alert.")
             state[channel_id] = [v["id"] for v in videos]
@@ -327,8 +365,9 @@ def main():
                 is_match, ep_num = check_video_matches_series(vid, s, settings)
                 if is_match:
                     print(f"  MATCH CONFIRMED! Series: {s['name']}, Target Ep: {ep_num}")
-                    msg = get_ai_message(s["name"], ep_num, vid["title"], vid["link"])
-                    send_telegram_message(msg)
+                    thumbnail_url = f"https://i.ytimg.com/vi/{vid['id']}/hqdefault.jpg"
+                    caption = get_ai_caption(s["name"], ep_num, vid["title"], vid["link"])
+                    send_telegram_alert(thumbnail_url, caption)
                     break
 
             state[channel_id].append(vid["id"])
