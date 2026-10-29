@@ -2,6 +2,7 @@ import json
 import os
 import re
 import sys
+import time
 import xml.etree.ElementTree as ET
 import requests
 from google import genai
@@ -111,7 +112,6 @@ def process_telegram_commands(state, config):
         chat_id = str(message.get("chat", {}).get("id", ""))
         text = message.get("text", "").strip()
 
-        # SECURITY: Ignore commands from anyone except the configured CHAT_ID
         if not text or chat_id != str(CHAT_ID):
             continue
 
@@ -119,18 +119,17 @@ def process_telegram_commands(state, config):
 
         if text.startswith("/start"):
             welcome_msg = (
-                "👋 <b>Welcome to YouTube Series Notifier!</b>\n\n"
-                "Main aapke pasandida YouTube series track karunga aur naya episode aate hi yahan alert bhejunga.\n\n"
-                "⚠️ <b>Dhyan Dein:</b> Main background mein har 30 minute mein ek baar jagta hoon (GitHub Actions Cron). "
-                "Isliye aapke kisi bhi command ka reply aane mein <b>~30 minutes tak lag sakte hain</b>. "
-                "Agar turant reply chahiye, toh repo ke 'Actions' tab se workflow manual run kar lein.\n\n"
-                "<b>Commands:</b>\n"
-                "• <code>/track &lt;youtube_link&gt;</code> : Link se series track karein\n"
-                "• <code>/track @handle &lt;series_name&gt;</code> : Handle aur naam se track karein\n"
-                "• <code>/list</code> : Tracked series dekhein\n"
-                "• <code>/stop &lt;name&gt;</code> : Series remove karein\n"
-                "• <code>/stop all</code> : Sab kuch remove karein\n"
-                "• <code>/tracktiming &lt;number&gt; &lt;h|m&gt;</code> : Check interval set karein"
+                "👋 <b>Welcome to YouTube Series Notifier!</b> 📺\n\n"
+                "Main aapke favourite YouTube series ke naye episodes track karke yahan notify karunga.\n\n"
+                "🚀 <b>Quick Commands:</b>\n"
+                "• <code>/track &lt;link&gt;</code> - YouTube video link se series add karein.\n"
+                "• <code>/list</code> - Tracked series ki list dekhein.\n"
+                "• <code>/stop &lt;name&gt;</code> - Kisi series ko tracking se hatayein.\n"
+                "• <code>/tracktiming &lt;num&gt; &lt;h|m&gt; &lt;name&gt;</code> - Check interval set karein (jaise: /tracktiming 2 h Naruto).\n\n"
+                "📝 <b>Kaise Kaam Karta Hai? (Details):</b>\n"
+                "• Aap direct link ke alawa <code>/track @handle SeriesName</code> bhi likh sakte hain.\n"
+                "• ⚠️ <b>Zaroori Baat:</b> Yeh bot background mein har 30 minutes mein ek baar check karta hai. Isliye aapke kisi bhi message ka reply aane mein <b>~30 minutes tak lag sakte hain</b>.\n"
+                "• Agar turant reply chahiye, toh GitHub repo ke 'Actions' tab se manual run kar lein."
             )
             send_telegram_message(welcome_msg)
             
@@ -143,15 +142,13 @@ def process_telegram_commands(state, config):
                     msg += f"{idx}. <b>{s.get('name', 'Unknown')}</b> (Channel: {s.get('channel', s.get('channel_id',''))})\n"
                 send_telegram_message(msg)
                 
-        elif text.startswith("/track"):
+        elif text.startswith("/track "):
             parts = text.split(" ", 1)
             if len(parts) < 2:
                 send_telegram_message("❌ <b>Sahi format:</b>\n1. <code>/track &lt;video_link&gt;</code>\n2. <code>/track @handle Series Name</code>")
                 continue
                 
             arg = parts[1].strip()
-            
-            # 1. Agar YouTube link di gayi hai
             if arg.startswith("http") or "youtube.com" in arg or "youtu.be" in arg:
                 url_to_check = arg.split(" ")[0]
                 send_telegram_message(f"⏳ Link process kar raha hoon: {url_to_check}")
@@ -164,11 +161,9 @@ def process_telegram_commands(state, config):
                         author_url = data.get("author_url", "")
                         channel_ident = author_url.split("/")[-1] if "/" in author_url else data.get("author_name", "")
                         
-                        # Title se "Episode X", "Part Y", "S1E2" remove karna taaki sirf series name bache
                         cleaned_title = re.sub(r'(?i)\s*(?:episode|ep|part|chapter|ch)\.?\s*#?\s*\d+.*$', '', title).strip()
                         cleaned_title = re.sub(r'(?i)\s*s\d+\s*e\d+.*$', '', cleaned_title).strip()
                         cleaned_title = re.sub(r'(?i)\s*[-|:]\s*$', '', cleaned_title).strip()
-                        
                         if not cleaned_title: cleaned_title = "Unknown Series"
 
                         series_list.append({
@@ -176,15 +171,15 @@ def process_telegram_commands(state, config):
                             "channel": channel_ident,
                             "include_keywords": [cleaned_title],
                             "exclude_keywords": ["Shorts", "Trailer", "Teaser", "Preview"],
-                            "last_watched_episode": 0
+                            "last_watched_episode": 0,
+                            "check_interval": 1800,
+                            "last_check_time": 0
                         })
-                        send_telegram_message(f"✅ <b>Series Added!</b>\n\n<b>Name:</b> {cleaned_title}\n<b>Channel:</b> {channel_ident}\n\nAap isey /list se check kar sakte hain.")
+                        send_telegram_message(f"✅ <b>Series Added!</b>\n\n<b>Name:</b> {cleaned_title}\n<b>Channel:</b> {channel_ident}")
                     else:
                         send_telegram_message("❌ Invalid YouTube link ya video private hai.")
                 except Exception as e:
                     send_telegram_message(f"❌ Error extracting details: {e}")
-                    
-            # 2. Agar @handle aur name diya gaya hai
             else:
                 sub_parts = arg.split(" ", 1)
                 if len(sub_parts) < 2 or not sub_parts[0].startswith("@"):
@@ -198,11 +193,62 @@ def process_telegram_commands(state, config):
                     "channel": channel_ident,
                     "include_keywords": [series_name],
                     "exclude_keywords": ["Shorts", "Trailer", "Teaser", "Preview"],
-                    "last_watched_episode": 0
+                    "last_watched_episode": 0,
+                    "check_interval": 1800,
+                    "last_check_time": 0
                 })
                 send_telegram_message(f"✅ <b>Series Added Manually!</b>\n\n<b>Name:</b> {series_name}\n<b>Channel:</b> {channel_ident}")
 
-        else:
+        elif text.startswith("/stop"):
+            arg = text[5:].strip()
+            if not arg:
+                send_telegram_message("❌ Kisko stop karna hai? Example: <code>/stop Naruto</code> ya <code>/stop all</code>")
+                continue
+                
+            if arg.lower() == "all":
+                series_list.clear()
+                send_telegram_message("🗑️ <b>Sabhi series tracking se hata di gayi hain.</b>")
+            else:
+                original_len = len(series_list)
+                series_list = [s for s in series_list if s.get("name", "").lower() != arg.lower()]
+                if len(series_list) < original_len:
+                    send_telegram_message(f"🗑️ <b>{arg}</b> ko tracking list se hata diya gaya hai.")
+                else:
+                    send_telegram_message(f"❌ '{arg}' naam ki koi series nahi mili. /list check karein.")
+
+        elif text.startswith("/tracktiming"):
+            parts = text.split(" ", 3)
+            if len(parts) < 4:
+                send_telegram_message("❌ <b>Sahi format:</b>\n<code>/tracktiming &lt;number&gt; &lt;h|m&gt; &lt;Series Name&gt;</code>\nExample: <code>/tracktiming 2 h My Anime</code>")
+                continue
+                
+            try:
+                num = int(parts[1])
+                unit = parts[2].lower()
+                series_target = parts[3].strip().lower()
+                
+                if unit.startswith("h"): interval_sec = num * 3600
+                elif unit.startswith("m"): interval_sec = num * 60
+                else:
+                    send_telegram_message("❌ Unit sirf 'h' (hours) ya 'm' (minutes) honi chahiye.")
+                    continue
+                
+                if interval_sec < 1800: interval_sec = 1800 # Min 30 mins limit
+                    
+                found = False
+                for s in series_list:
+                    if s.get("name", "").lower() == series_target:
+                        s["check_interval"] = interval_sec
+                        found = True
+                        send_telegram_message(f"⏱️ <b>Timing Updated!</b>\n'{s['name']}' ab har {num} {unit} mein check hogi.")
+                        break
+                
+                if not found:
+                    send_telegram_message(f"❌ '{series_target}' naam ki koi series nahi mili. /list check karein.")
+            except ValueError:
+                send_telegram_message("❌ Number invalid hai. Example: /tracktiming 2 h My Anime")
+                
+        elif text.startswith("/"):
             send_telegram_message("❌ Command samajh nahi aayi. List of commands ke liye /start bhejein.")
 
     state["last_update_id"] = last_update_id
@@ -352,14 +398,12 @@ def main():
     config = load_json(CONFIG_FILE, {"series": [], "settings": {}})
     state = load_json(STATE_FILE, {})
 
-    # 1. Read & Answer Telegram Commands
+    # 1. Process Telegram Commands
     state, config = process_telegram_commands(state, config)
-    
-    # Save immediately (Bot writes to config.json automatically)
     save_json(STATE_FILE, state)
     save_json(CONFIG_FILE, config)
 
-    # 2. Check RSS Feeds
+    # 2. Check RSS Feeds with Timing Control
     series_list = config.get("series", [])
     settings = config.get("settings", {})
     if not series_list: return
@@ -370,10 +414,29 @@ def main():
         ident = ident.strip()
         if ident: channel_to_series.setdefault(ident, []).append(s)
 
+    current_time = time.time()
+
     for ident, series_configs in channel_to_series.items():
+        needs_check = False
+        for s in series_configs:
+            last_check = s.get("last_check_time", 0)
+            interval = s.get("check_interval", 1800)
+            if current_time - last_check >= (interval - 60):
+                needs_check = True
+                break
+                
+        if not needs_check:
+            print(f"Skipping channel {ident} - Timing interval not reached yet.")
+            continue
+
         channel_id = resolve_to_channel_id(ident)
         if not channel_id: continue
+        
         videos = fetch_channel_feed(channel_id)
+        
+        for s in series_configs:
+            s["last_check_time"] = current_time
+
         if not videos: continue
 
         if channel_id not in state:
@@ -395,6 +458,8 @@ def main():
                     break
             state[channel_id].append(vid["id"])
             save_json(STATE_FILE, state)
+
+    save_json(CONFIG_FILE, config)
 
 if __name__ == "__main__":
     main()
