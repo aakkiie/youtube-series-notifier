@@ -3,6 +3,7 @@ import os
 import re
 import sys
 import time
+import html
 import xml.etree.ElementTree as ET
 import requests
 from google import genai
@@ -19,7 +20,6 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 CONFIG_FILE = "config.json"
 STATE_FILE = "state.json"
 
-# Naye Constants
 GEMINI_MODEL_NAME = "gemini-3.8-flash"
 MAX_SEEN_VIDEOS = 50
 
@@ -86,6 +86,13 @@ def get_telegram_updates(last_update_id):
     return []
 
 def process_telegram_commands(state, config):
+    # FIX 3: Reset last_update_id if Bot Token changes
+    if BOT_TOKEN and ":" in BOT_TOKEN:
+        current_bot_id = BOT_TOKEN.split(":")[0]
+        if state.get("bot_id") != current_bot_id:
+            state["last_update_id"] = 0
+            state["bot_id"] = current_bot_id
+            
     last_update_id = state.get("last_update_id", 0)
     updates = get_telegram_updates(last_update_id)
     if not updates: return state, config
@@ -122,14 +129,16 @@ def process_telegram_commands(state, config):
             else:
                 msg = "📋 <b>Tracked Series List:</b>\n\n"
                 for idx, s in enumerate(series_list, 1):
-                    msg += f"{idx}. <b>{s.get('name', 'Unknown')}</b> (Channel: {s.get('channel', '')})\n"
+                    msg += f"{idx}. <b>{html.escape(s.get('name', 'Unknown'))}</b> (Channel: {html.escape(s.get('channel', ''))})\n"
                 send_telegram_message(msg)
                 
-        elif text.startswith("/track "):
+        elif text.startswith("/track"):
             parts = text.split(" ", 1)
-            if len(parts) < 2:
+            # FIX 6: Bare /track command validation
+            if len(parts) < 2 or not parts[1].strip():
                 send_telegram_message("❌ <b>Sahi format:</b>\n1. <code>/track &lt;video_link&gt;</code>\n2. <code>/track @handle Series Name</code>")
                 continue
+                
             arg = parts[1].strip()
             if arg.startswith("http") or "youtube.com" in arg or "youtu.be" in arg:
                 url_to_check = arg.split(" ")[0]
@@ -143,22 +152,33 @@ def process_telegram_commands(state, config):
                         author_url = data.get("author_url", "")
                         channel_ident = author_url.split("/")[-1] if "/" in author_url else data.get("author_name", "")
                         
-                        cleaned_title = re.sub(r'(?i)\s*(?:episode|ep|part|chapter|ch)\.?\s*#?\s*\d+.*$', '', title).strip()
+                        # FIX 2: Added \b before episode|ep|part...
+                        cleaned_title = re.sub(r'(?i)\s*\b(?:episode|ep|part|chapter|ch)\.?\s*#?\s*\d+.*$', '', title).strip()
                         cleaned_title = re.sub(r'(?i)\s*s\d+\s*e\d+.*$', '', cleaned_title).strip()
                         cleaned_title = re.sub(r'(?i)\s*[-|:]\s*$', '', cleaned_title).strip()
-                        if not cleaned_title: cleaned_title = "Unknown Series"
                         
-                        # Duplicate check
+                        # FIX 2: If cleaned name is empty
+                        if not cleaned_title:
+                            send_telegram_message("❌ Series ka naam extract nahi ho paaya. Kripya manual format use karein:\n<code>/track @handle Series Name</code>")
+                            continue
+                            
+                        # FIX 1: Extract episode number from linked video's title to set as baseline
+                        ep_num_from_link = extract_episode_number(title) or 0
+                        
                         is_dup = any(s.get("name", "").lower() == cleaned_title.lower() for s in series_list)
                         if is_dup:
-                            send_telegram_message(f"⚠️ <b>{cleaned_title}</b> pehle se track ho rahi hai!")
+                            send_telegram_message(f"⚠️ <b>{html.escape(cleaned_title)}</b> pehle se track ho rahi hai!")
                         else:
                             series_list.append({
-                                "name": cleaned_title, "channel": channel_ident, "include_keywords": [cleaned_title],
-                                "exclude_keywords": ["Shorts", "Trailer", "Teaser", "Preview"], "last_watched_episode": 0,
-                                "check_interval": 1800, "last_check_time": 0
+                                "name": cleaned_title, 
+                                "channel": channel_ident, 
+                                "include_keywords": [cleaned_title],
+                                "exclude_keywords": ["Shorts", "Trailer", "Teaser", "Preview"], 
+                                "last_watched_episode": ep_num_from_link,
+                                "check_interval": 1800, 
+                                "last_check_time": 0
                             })
-                            send_telegram_message(f"✅ <b>Series Added!</b>\n\n<b>Name:</b> {cleaned_title}\n<b>Channel:</b> {channel_ident}")
+                            send_telegram_message(f"✅ <b>Series Added!</b>\n\n<b>Name:</b> {html.escape(cleaned_title)}\n<b>Channel:</b> {html.escape(channel_ident)}\n<b>Baseline Episode:</b> {ep_num_from_link}")
                     else:
                         send_telegram_message("❌ Invalid YouTube link ya video private hai.")
                 except Exception as e:
@@ -170,17 +190,20 @@ def process_telegram_commands(state, config):
                     continue
                 channel_ident, series_name = sub_parts[0], sub_parts[1].strip()
                 
-                # Duplicate check
                 is_dup = any(s.get("name", "").lower() == series_name.lower() for s in series_list)
                 if is_dup:
-                    send_telegram_message(f"⚠️ <b>{series_name}</b> pehle se track ho rahi hai!")
+                    send_telegram_message(f"⚠️ <b>{html.escape(series_name)}</b> pehle se track ho rahi hai!")
                 else:
                     series_list.append({
-                        "name": series_name, "channel": channel_ident, "include_keywords": [series_name],
-                        "exclude_keywords": ["Shorts", "Trailer", "Teaser", "Preview"], "last_watched_episode": 0,
-                        "check_interval": 1800, "last_check_time": 0
+                        "name": series_name, 
+                        "channel": channel_ident, 
+                        "include_keywords": [series_name],
+                        "exclude_keywords": ["Shorts", "Trailer", "Teaser", "Preview"], 
+                        "last_watched_episode": 0,
+                        "check_interval": 1800, 
+                        "last_check_time": 0
                     })
-                    send_telegram_message(f"✅ <b>Series Added Manually!</b>\n\n<b>Name:</b> {series_name}\n<b>Channel:</b> {channel_ident}")
+                    send_telegram_message(f"✅ <b>Series Added Manually!</b>\n\n<b>Name:</b> {html.escape(series_name)}\n<b>Channel:</b> {html.escape(channel_ident)}")
 
         elif text.startswith("/stop"):
             arg = text[5:].strip()
@@ -194,9 +217,9 @@ def process_telegram_commands(state, config):
                 original_len = len(series_list)
                 series_list = [s for s in series_list if s.get("name", "").lower() != arg.lower()]
                 if len(series_list) < original_len:
-                    send_telegram_message(f"🗑️ <b>{arg}</b> ko tracking list se hata diya gaya hai.")
+                    send_telegram_message(f"🗑️ <b>{html.escape(arg)}</b> ko tracking list se hata diya gaya hai.")
                 else:
-                    send_telegram_message(f"❌ '{arg}' naam ki koi series nahi mili. /list check karein.")
+                    send_telegram_message(f"❌ '{html.escape(arg)}' naam ki koi series nahi mili. /list check karein.")
 
         elif text.startswith("/tracktiming"):
             parts = text.split(" ", 3)
@@ -215,9 +238,9 @@ def process_telegram_commands(state, config):
                     if s.get("name", "").lower() == series_target:
                         s["check_interval"] = interval_sec
                         found = True
-                        send_telegram_message(f"⏱️ <b>Timing Updated!</b>\n'{s['name']}' ab har {num} {unit} mein check hogi.")
+                        send_telegram_message(f"⏱️ <b>Timing Updated!</b>\n'{html.escape(s['name'])}' ab har {num} {unit} mein check hogi.")
                         break
-                if not found: send_telegram_message(f"❌ '{series_target}' naam ki koi series nahi mili.")
+                if not found: send_telegram_message(f"❌ '{html.escape(series_target)}' naam ki koi series nahi mili.")
             except ValueError:
                 send_telegram_message("❌ Number invalid hai. Example: /tracktiming 2 h My Anime")
         elif text.startswith("/"):
@@ -229,9 +252,11 @@ def process_telegram_commands(state, config):
 
 def get_ai_caption(series_name, ep_num, title, link):
     ep_label = f"Episode {ep_num}" if ep_num else "Next Part"
-    base_header = f"🔥 <b>{series_name}</b> ({ep_label})\n🎬 <b>{title}</b>\n\n"
+    # FIX 6: HTML escape for rich formatting
+    base_header = f"🔥 <b>{html.escape(series_name)}</b> ({ep_label})\n🎬 <b>{html.escape(title)}</b>\n\n"
     base_footer = f"\n\n👉 Dekho abhi: {link}"
     ai_line = "Naya episode release ho gaya hai! Abhi jaakar dekho."
+    
     if GEMINI_API_KEY:
         try:
             client = genai.Client(api_key=GEMINI_API_KEY)
@@ -259,7 +284,6 @@ def resolve_to_channel_id(identifier, state):
     identifier = identifier.strip()
     if identifier.startswith("UC") and len(identifier) == 24: return identifier
     
-    # Caching check
     if "channel_cache" not in state: state["channel_cache"] = {}
     if identifier in state["channel_cache"]: return state["channel_cache"][identifier]
 
@@ -314,6 +338,7 @@ def extract_episode_number(text):
     if not text: return None
     se_match = re.search(r'(?i)\bs\d+\s*e(\d+)\b', text)
     if se_match: return int(se_match.group(1))
+    # FIX 2: Added \b before episode
     word_match = re.search(r'(?i)\b(?:episode|ep|part|chapter|ch)\.?\s*#?\s*(\d+)\b', text)
     if word_match: return int(word_match.group(1))
     hash_match = re.search(r'(?i)(?:#|(?<=\b)E)(\d+)\b', text)
@@ -323,16 +348,9 @@ def extract_episode_number(text):
 def fetch_transcript_snippet(video_id):
     if not YouTubeTranscriptApi: return ""
     try:
-        # V1+ Instance .fetch() syntax
-        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-        try:
-            transcript = transcript_list.find_transcript(['en', 'hi', 'ja'])
-        except Exception:
-            # Fallback to first available
-            transcript = list(transcript_list)[0]
-            
-        data = transcript.fetch()
-        return " ".join([item['text'] for item in data[:15]])[:400]
+        # FIX 4: Reverted to old syntax for version 0.6.3
+        transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['en', 'hi', 'ja'])
+        return " ".join([item['text'] for item in transcript_list[:15]])[:400]
     except Exception as e:
         print(f"❌ Transcript missing/error for {video_id}: {e}")
         return ""
@@ -366,10 +384,14 @@ def check_video_matches_series(video, series, settings):
         if ex.strip() and ex.strip().lower() in combined_text: return False, None
     for inc in series.get("include_keywords", []):
         if inc.strip() and inc.strip().lower() not in combined_text: return False, None
-    ep_num = extract_episode_number(video["title"]) or extract_episode_number(video["description"])
+        
+    # FIX 1: Only check the title for the episode number to avoid vague description false positives
+    ep_num = extract_episode_number(video["title"])
     last_watched = series.get("last_watched_episode", 0)
+    
     if ep_num is not None:
         return (True, ep_num) if ep_num > last_watched else (False, None)
+        
     return ask_gemini_confirmation(video, series, settings)
 
 def main():
@@ -403,7 +425,12 @@ def main():
         if not channel_id: continue
         
         videos = fetch_channel_feed(channel_id)
-        for s in series_configs: s["last_check_time"] = current_time
+        
+        # FIX 5: Only save last_check_time if check_interval is > 30 mins
+        for s in series_configs: 
+            if s.get("check_interval", 1800) > 1800:
+                s["last_check_time"] = current_time
+                
         if not videos: continue
 
         if channel_id not in state:
@@ -421,9 +448,12 @@ def main():
                     thumbnail_url = f"https://i.ytimg.com/vi/{vid['id']}/hqdefault.jpg"
                     caption = get_ai_caption(s["name"], ep_num, vid["title"], vid["link"])
                     send_telegram_alert(thumbnail_url, caption)
+                    
+                    # FIX 1: Set last_watched_episode to the highest alerted episode
+                    if ep_num:
+                        s["last_watched_episode"] = max(s.get("last_watched_episode", 0), int(ep_num))
                     break
             
-            # State Append aur Max 50 IDs limit lagana
             state[channel_id].append(vid["id"])
             if len(state[channel_id]) > MAX_SEEN_VIDEOS:
                 state[channel_id] = state[channel_id][-MAX_SEEN_VIDEOS:]
