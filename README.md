@@ -1,52 +1,50 @@
 # 📺 YouTube Next Episode Finder & Telegram Notifier
 
-Ek lightweight, 100% serverless aur open-source tool jo YouTube channels ko track karta hai aur naye anime/series episodes aate hi seedha Telegram par thumbnail poster aur Hinglish summary ke saath notification bhejta hai.
+A lightweight, 100% serverless, and open-source tool that tracks YouTube channels and sends a Telegram alert with a thumbnail and AI-generated summary whenever a **new episode** is uploaded.
 
-🎉 **Naya Update:** Ab poora system directly Telegram se control hota hai! Kisi code ya JSON file ko manually edit karne ki zaroorat nahi hai.
+Ek 100% serverless tool jo YouTube par naye episodes aate hi seedha Telegram par thumbnail aur summary ke saath alert bhejta hai.
 
----
-
-## ✨ Features
-
-- **100% Telegram Controlled:** Nayi series add karni ho ya hatani ho, sab Telegram commands (`/track`, `/stop`, `/list`) se hota hai.
-- **100% Mobile Managed:** Phone ke browser se setup ho jata hai, kisi computer ya terminal ki zaroorat nahi.
-- **Zero YouTube Data API Quota:** Public RSS feeds use karta hai, isliye koi Google Cloud quota khatam hone ka dar nahi.
-- **Smart Episode Matching & AI Fallback:** Regex aur Google Gemini AI ka use karke sirf "next/new" episodes identify karta hai.
-- **Secure Control:** Sirf aapka authorized Telegram account hi bot ko commands de sakta hai.
+🎉 **100% Telegram Controlled:** No need to edit code manually. Add, remove, and manage tracked series directly by chatting with your bot! / Code edit karne ki zaroorat nahi, sab kuch Telegram commands se control hota hai.
 
 ---
 
-## 🚀 Mobile Setup Guide (Phone se Setup kaise karein)
+## 🚀 Mobile Setup Guide (English / Hinglish)
 
-### 1. Repository Fork karein
-Upar right corner mein **Fork** button par tap karein aur apne account mein repository create kar lein.
+You don't need a PC or terminal to set this up. You can do everything from your mobile browser! / Aap isey poori tarah apne phone browser se setup kar sakte hain.
 
-### 2. GitHub Secrets Add karein
-Apne repo mein **Settings** > **Secrets and variables** > **Actions** par jayein aur yeh 3 secrets add karein (**New repository secret**):
+### Step 1: Fork This Repository
+Tap the **Fork** button at the top right of this page to copy it to your account. / Upar right corner mein **Fork** button dabayein.
 
-| Secret Name | Description |
-|---|---|
-| `TELEGRAM_BOT_TOKEN` | BotFather se mila Telegram bot token |
-| `TELEGRAM_CHAT_ID` | Aapka Telegram user ID (jisse sirf aap command de sakein) |
-| `GEMINI_API_KEY` | Google AI Studio se mili free Gemini API key |
+### Step 2: Get Your Secret Keys (Yeh 3 keys zaroori hain)
+You need three keys to make this work. / Bot ko chalane ke liye 3 chijein chahiye:
 
-### 3. Workflow Permissions Enable karein
-GitHub Actions ko bot ka data save karne ki permission dene ke liye:
-1. Repo **Settings** > Left menu mein **Actions** > **General** par jayein.
-2. Niche scroll karke **Workflow permissions** section mein **Read and write permissions** select karein.
-3. **Save** par tap karein.
+1. **`TELEGRAM_BOT_TOKEN`**: 
+   * Go to Telegram and search for `@BotFather`.
+   * Send `/newbot`, give it a name, and copy the HTTP API Token it gives you.
+2. **`TELEGRAM_CHAT_ID`**: 
+   * Search for `@userinfobot` on Telegram and send `/start`.
+   * Copy the ID number it replies with. (Only this ID will be able to control the bot).
+3. **`GEMINI_API_KEY`**: 
+   * Go to [Google AI Studio](https://aistudio.google.com/), sign in, and create a free API key.
 
-### 4. Engine Start Karein (Pehli Baar)
-1. Repo ke **Actions** tab par jayein.
-2. **YouTube Channel Tracker** par tap karein.
-3. **Run workflow** button press karein. 
-*(Pehli run par system initialize ho jayega)*
+### Step 3: Add Secrets to GitHub
+1. In your forked repo, go to **Settings** > **Secrets and variables** > **Actions**.
+2. Tap **New repository secret** and add the 3 keys above one by one. Exact names matter! / Upar di gayi teeno keys ko yahan save karein.
 
-### 5. Telegram Par Bot Ko Command Dein!
-Apne Telegram bot ke chat mein jayein aur type karein:
+### Step 4: Enable Permissions
+1. Go to repo **Settings** > **Actions** > **General**.
+2. Scroll down to **Workflow permissions**, select **Read and write permissions**, and hit **Save**. / Yeh step zaroori hai taaki bot apna data save kar sake.
+
+### Step 5: Start the Engine!
+1. Go to the **Actions** tab in your repo.
+2. Tap on **YouTube Channel Tracker**.
+3. Tap **Run workflow**. (This initializes the bot). / Run dabate hi bot start ho jayega.
+
+### Step 6: Chat with your Bot
+Open your newly created bot on Telegram and send:
 `/start`
 
-Nayi anime ya series track karne ke liye bas uski YouTube video ka link bhej dein:
+To track a new series, just send the YouTube link:
 `/track https://www.youtube.com/watch?v=...`
 
-⚠️ **Note:** GitHub Actions free tier par yeh bot background mein har 30 minute mein check karta hai, isliye commands ka reply aane mein ~30 minutes tak lag sakte hain. Turant reply chahiye toh Actions tab se workflow manual run kar lein.
+⚠️ **Note:** The bot runs in the background every 30 minutes (GitHub Free limits). Expect up to a 30-minute delay for replies and alerts. For instant testing, trigger the workflow manually from the Actions tab. / Bot har 30 minute mein check karta hai, isliye reply aane mein 30 min lag sakte hain. Turant reply ke liye Actions tab se manual run karein.
