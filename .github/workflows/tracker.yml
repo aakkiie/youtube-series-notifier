@@ -12,13 +12,18 @@ jobs:
   check-feed:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - run: pip install -r requirements.txt
+      - name: Install Dependencies
+        run: pip install -r requirements.txt
 
       - name: Run Tracker Script
         env:
@@ -27,10 +32,32 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python main.py
 
-      - name: Commit State
+      - name: Commit and Save State
         run: |
           git config --global user.name "actions-bot"
           git config --global user.email "bot@github.com"
-          git add state.json || true
-          git commit -m "Update state [skip ci]" || exit 0
-          git push || true
+          
+          # Check if state.json exists and has changes
+          if [ ! -f state.json ]; then
+            echo "::error::state.json does not exist! Failing loud to prevent repeat alerts."
+            exit 1
+          fi
+
+          git add state.json
+
+          if git diff --staged --quiet; then
+            echo "No state changes detected. Repository is already up to date."
+          else
+            echo "State changes detected. Committing and pushing..."
+            git commit -m "Update state [skip ci]"
+            
+            # Pull rebase before push to avoid concurrency conflicts
+            git pull --rebase origin main || true
+            
+            # Fail loudly if push cannot succeed
+            if ! git push origin main; then
+              echo "::error::CRITICAL: Failed to push state.json to repository! Check branch permissions."
+              exit 1
+            fi
+            echo "State saved and pushed successfully."
+          fi
