@@ -33,7 +33,6 @@ def strip_html(text):
     return re.sub(r'<[^>]*>', '', text)
 
 def send_telegram_message(message_text, target_chat_id=None):
-    # Agar target_chat_id diya hai toh uspar bhejo, warna default CHAT_ID par
     chat_to_use = target_chat_id if target_chat_id else CHAT_ID
     if not BOT_TOKEN or not chat_to_use: return False
     
@@ -101,7 +100,7 @@ def process_telegram_commands(state, config):
     
     series_list = config.get("series", [])
     processed_cmds = set()
-    unauthorized_notified = set() # Store notified unauthorized users per run
+    unauthorized_notified = set()
     
     for update in updates:
         update_id = update["update_id"]
@@ -112,8 +111,17 @@ def process_telegram_commands(state, config):
 
         if not text: continue
 
-        # Unauthorized chat handler
+        # Unauthorized access handler with detailed console logging
         if chat_id != str(CHAT_ID):
+            from_user = message.get("from", {})
+            user_fullname = f"{from_user.get('first_name', '')} {from_user.get('last_name', '')}".strip() or "Unknown"
+            username = f"@{from_user.get('username')}" if from_user.get("username") else "No username"
+            
+            print(f"🚨 [Security Log] Unauthorized Access Attempt:")
+            print(f"   • User: {user_fullname} ({username})")
+            print(f"   • Chat ID: {chat_id}")
+            print(f"   • Message Sent: {text}")
+
             if chat_id not in unauthorized_notified:
                 unauth_msg = "This bot is private. To use it, fork the project and run your own copy: https://github.com/aakkiie/youtube-series-notifier"
                 send_telegram_message(unauth_msg, target_chat_id=chat_id)
