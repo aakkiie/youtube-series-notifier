@@ -5,6 +5,10 @@ on:
     - cron: '*/30 * * * *'
   workflow_dispatch:
 
+concurrency:
+  group: "tracker-bot"
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -37,26 +41,23 @@ jobs:
           git config --global user.name "actions-bot"
           git config --global user.email "bot@github.com"
           
-          # Check if state.json exists and has changes
           if [ ! -f state.json ]; then
             echo "::error::state.json does not exist! Failing loud to prevent repeat alerts."
             exit 1
           fi
 
-          git add state.json
+          git add state.json config.json
 
           if git diff --staged --quiet; then
             echo "No state changes detected. Repository is already up to date."
           else
             echo "State changes detected. Committing and pushing..."
-            git commit -m "Update state [skip ci]"
+            git commit -m "Update state and config [skip ci]"
             
-            # Pull rebase before push to avoid concurrency conflicts
             git pull --rebase origin main || true
             
-            # Fail loudly if push cannot succeed
             if ! git push origin main; then
-              echo "::error::CRITICAL: Failed to push state.json to repository! Check branch permissions."
+              echo "::error::CRITICAL: Failed to push to repository! Check branch permissions."
               exit 1
             fi
             echo "State saved and pushed successfully."
