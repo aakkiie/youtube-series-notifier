@@ -1,8 +1,8 @@
 {
   "series": [
     {
-      "name": "Target Anime Series",
-      "channel_id": "UCeBCrzpdqH0qImV21r83_1A",
+      "name": "My Anime Series",
+      "channel": "@beaniesurvives",
       "include_keywords": ["Episode", "Part", "Ep"],
       "exclude_keywords": ["Shorts", "Trailer", "Teaser"],
       "last_watched_episode": 0
