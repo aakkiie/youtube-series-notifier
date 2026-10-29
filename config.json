@@ -2,13 +2,5 @@
   "settings": {
     "ai_fallback_on_error": "alert"
   },
-  "series": [
-    {
-      "name": "My Anime Series",
-      "channel": "@beaniesurvives",
-      "include_keywords": ["Episode", "Part", "Ep"],
-      "exclude_keywords": ["Shorts", "Trailer", "Teaser"],
-      "last_watched_episode": 0
-    }
-  ]
+  "series": []
 }
