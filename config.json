@@ -1,4 +1,7 @@
 {
+  "settings": {
+    "ai_fallback_on_error": "alert"
+  },
   "series": [
     {
       "name": "My Anime Series",
