@@ -22,8 +22,32 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
 }
 
+# --- TELEGRAM UTILS ---
+
 def strip_html(text):
     return re.sub(r'<[^>]*>', '', text)
+
+def send_telegram_message(message_text):
+    if not BOT_TOKEN or not CHAT_ID:
+        return False
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": message_text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True
+    }
+    try:
+        res = requests.post(url, json=payload, timeout=10)
+        if res.status_code != 200:
+            # Fallback to plain text if HTML fails
+            payload["text"] = strip_html(message_text)
+            payload["parse_mode"] = None
+            requests.post(url, json=payload, timeout=10)
+        return True
+    except Exception as e:
+        print(f"Telegram sendMessage error: {e}")
+        return False
 
 def send_telegram_alert(photo_url, caption_html):
     if not BOT_TOKEN or not CHAT_ID:
@@ -31,8 +55,6 @@ def send_telegram_alert(photo_url, caption_html):
         return False
 
     plain_caption = strip_html(caption_html)
-
-    # Telegram caption limit is strictly 1024 characters
     if len(caption_html) > 1020:
         caption_html = caption_html[:1015] + "..."
     if len(plain_caption) > 1020:
@@ -41,60 +63,106 @@ def send_telegram_alert(photo_url, caption_html):
     photo_endpoint = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
     message_endpoint = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
-    # Step 1: Try sending photo with HTML caption
     try:
-        res = requests.post(photo_endpoint, json={
-            "chat_id": CHAT_ID,
-            "photo": photo_url,
-            "caption": caption_html,
-            "parse_mode": "HTML"
-        }, timeout=12)
+        res = requests.post(photo_endpoint, json={"chat_id": CHAT_ID, "photo": photo_url, "caption": caption_html, "parse_mode": "HTML"}, timeout=12)
         if res.status_code == 200:
-            print("Telegram photo alert sent successfully with HTML!")
-            return True
-        print(f"sendPhoto HTML failed ({res.status_code}): {res.text}. Retrying as Plain Text...")
-    except Exception as e:
-        print(f"sendPhoto HTML request error: {e}")
-
-    # Step 2: Retry photo with plain text caption (fixes unclosed HTML tags)
-    try:
-        res = requests.post(photo_endpoint, json={
-            "chat_id": CHAT_ID,
-            "photo": photo_url,
-            "caption": plain_caption
-        }, timeout=12)
-        if res.status_code == 200:
-            print("Telegram photo alert sent successfully with Plain Text fallback!")
-            return True
-        print(f"sendPhoto plain failed ({res.status_code}): {res.text}. Retrying with sendMessage...")
-    except Exception as e:
-        print(f"sendPhoto plain request error: {e}")
-
-    # Step 3: Fallback to sendMessage if photo upload failed
-    try:
-        res = requests.post(message_endpoint, json={
-            "chat_id": CHAT_ID,
-            "text": caption_html,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": False
-        }, timeout=10)
-        if res.status_code == 200:
-            print("Telegram message alert sent (sendMessage fallback)!")
             return True
     except Exception:
         pass
 
-    # Final plain text sendMessage attempt
     try:
-        res = requests.post(message_endpoint, json={
-            "chat_id": CHAT_ID,
-            "text": plain_caption,
-            "disable_web_page_preview": False
-        }, timeout=10)
-        return res.status_code == 200
-    except Exception as e:
-        print(f"All Telegram alert attempts failed: {e}")
+        res = requests.post(photo_endpoint, json={"chat_id": CHAT_ID, "photo": photo_url, "caption": plain_caption}, timeout=12)
+        if res.status_code == 200:
+            return True
+    except Exception:
+        pass
+
+    try:
+        res = requests.post(message_endpoint, json={"chat_id": CHAT_ID, "text": caption_html, "parse_mode": "HTML"}, timeout=10)
+        if res.status_code == 200:
+            return True
+    except Exception:
+        pass
+
+    try:
+        requests.post(message_endpoint, json={"chat_id": CHAT_ID, "text": plain_caption}, timeout=10)
+        return True
+    except Exception:
         return False
+
+# --- TELEGRAM COMMAND PROCESSOR ---
+
+def get_telegram_updates(last_update_id):
+    if not BOT_TOKEN:
+        return []
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
+    params = {"offset": last_update_id + 1, "timeout": 10}
+    try:
+        res = requests.get(url, params=params, timeout=15)
+        if res.status_code == 200:
+            return res.json().get("result", [])
+    except Exception as e:
+        print(f"Error fetching getUpdates: {e}")
+    return []
+
+def process_telegram_commands(state, config):
+    last_update_id = state.get("last_update_id", 0)
+    updates = get_telegram_updates(last_update_id)
+    
+    if not updates:
+        return state, config
+
+    series_list = config.get("series", [])
+    
+    for update in updates:
+        update_id = update["update_id"]
+        last_update_id = max(last_update_id, update_id)
+
+        message = update.get("message", {})
+        chat_id = str(message.get("chat", {}).get("id", ""))
+        text = message.get("text", "").strip()
+
+        # SECURITY: Ignore commands from anyone except the configured CHAT_ID
+        if not text or chat_id != str(CHAT_ID):
+            continue
+
+        print(f"Received command: {text}")
+
+        if text.startswith("/start"):
+            welcome_msg = (
+                "👋 <b>Welcome to YouTube Series Notifier!</b>\n\n"
+                "Main aapke pasandida YouTube series track karunga aur naya episode aate hi yahan alert bhejunga.\n\n"
+                "⚠️ <b>Dhyan Dein:</b> Main background mein har 30 minute mein ek baar jagta hoon (GitHub Actions Cron). "
+                "Isliye aapke kisi bhi command ka reply aane mein <b>~30 minutes tak lag sakte hain</b>. "
+                "Agar turant reply chahiye, toh repo ke 'Actions' tab se workflow manual run kar lein.\n\n"
+                "<b>Commands:</b>\n"
+                "• <code>/track &lt;youtube_link&gt;</code> : Link se series track karein\n"
+                "• <code>/track @handle &lt;series_name&gt;</code> : Handle aur naam se track karein\n"
+                "• <code>/list</code> : Tracked series dekhein\n"
+                "• <code>/stop &lt;name&gt;</code> : Series remove karein\n"
+                "• <code>/stop all</code> : Sab kuch remove karein\n"
+                "• <code>/tracktiming &lt;number&gt; &lt;h|m&gt;</code> : Check interval set karein"
+            )
+            send_telegram_message(welcome_msg)
+            
+        elif text.startswith("/list"):
+            if not series_list:
+                send_telegram_message("Abhi koi bhi series track nahi ho rahi hai. Add karne ke liye /track use karein.")
+            else:
+                msg = "📋 <b>Tracked Series List:</b>\n\n"
+                for idx, s in enumerate(series_list, 1):
+                    msg += f"{idx}. <b>{s.get('name', 'Unknown')}</b> (Channel: {s.get('channel', s.get('channel_id',''))})\n"
+                send_telegram_message(msg)
+                
+        else:
+            # Fallback for unknown/bad commands
+            send_telegram_message("❌ Command samajh nahi aayi ya abhi implement nahi hui hai. List of commands ke liye /start bhejein.")
+
+    state["last_update_id"] = last_update_id
+    config["series"] = series_list
+    return state, config
+
+# --- EXISTING CORE ENGINE ---
 
 def get_ai_caption(series_name, ep_num, title, link):
     ep_label = f"Episode {ep_num}" if ep_num else "Next Part"
@@ -124,8 +192,7 @@ def load_json(filepath, default):
         try:
             with open(filepath, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except Exception as e:
-            print(f"Error reading {filepath}: {e}")
+        except Exception:
             return default
     return default
 
@@ -140,11 +207,9 @@ def resolve_to_channel_id(identifier):
 
     handle = identifier if identifier.startswith("@") else f"@{identifier}"
     url = f"https://www.youtube.com/{handle}"
-    print(f"Resolving channel ID for handle: {handle}...")
     try:
         res = requests.get(url, headers=HEADERS, timeout=15)
         if res.status_code != 200:
-            print(f"Failed to load channel page {url}: Status {res.status_code}")
             return None
 
         patterns = [
@@ -156,14 +221,9 @@ def resolve_to_channel_id(identifier):
         for pattern in patterns:
             match = re.search(pattern, res.text)
             if match:
-                channel_id = match.group(1)
-                print(f"Found Channel ID: {channel_id}")
-                return channel_id
-
-        print(f"Could not extract Channel ID for {handle}")
+                return match.group(1)
         return None
-    except Exception as e:
-        print(f"Error resolving handle {handle}: {e}")
+    except Exception:
         return None
 
 def fetch_channel_feed(channel_id):
@@ -171,7 +231,6 @@ def fetch_channel_feed(channel_id):
     try:
         res = requests.get(url, headers=HEADERS, timeout=15)
         if res.status_code != 200:
-            print(f"Failed to fetch RSS for {channel_id}: Status {res.status_code}")
             return []
         root = ET.fromstring(res.content)
         ns = {
@@ -201,26 +260,21 @@ def fetch_channel_feed(channel_id):
                     "description": desc
                 })
         return videos
-    except Exception as e:
-        print(f"Error fetching/parsing feed for {channel_id}: {e}")
+    except Exception:
         return []
 
 def extract_episode_number(text):
     if not text:
         return None
-    
     se_match = re.search(r'(?i)\bs\d+\s*e(\d+)\b', text)
     if se_match:
         return int(se_match.group(1))
-
     word_match = re.search(r'(?i)\b(?:episode|ep|part|chapter|ch)\.?\s*#?\s*(\d+)\b', text)
     if word_match:
         return int(word_match.group(1))
-
     hash_match = re.search(r'(?i)(?:#|(?<=\b)E)(\d+)\b', text)
     if hash_match:
         return int(hash_match.group(1))
-
     return None
 
 def fetch_transcript_snippet(video_id):
@@ -267,11 +321,9 @@ def ask_gemini_confirmation(video, series, settings):
         result = json.loads(clean_text)
         is_next = bool(result.get("is_next_part", False))
         det_ep = result.get("detected_episode")
-        print(f"  [AI Validation] Result: {is_next}, Detected Ep: {det_ep}, Reason: {result.get('reason')}")
         return is_next, det_ep
 
-    except Exception as e:
-        print(f"  [AI Validation] Gemini call error: {e}")
+    except Exception:
         fallback_action = settings.get("ai_fallback_on_error", "alert")
         if fallback_action == "alert":
             return True, None
@@ -283,7 +335,6 @@ def check_video_matches_series(video, series, settings):
 
     for ex in series.get("exclude_keywords", []):
         if ex.strip() and ex.strip().lower() in combined_text:
-            print(f"  -> Discarded by exclude keyword '{ex}'")
             return False, None
 
     matched_all_include = True
@@ -305,10 +356,8 @@ def check_video_matches_series(video, series, settings):
         if ep_num > last_watched:
             return True, ep_num
         else:
-            print(f"  -> Detected Ep {ep_num} <= last watched {last_watched}. Skipping.")
             return False, None
 
-    print("  -> Keyword match found but episode number is unclear. Calling Gemini AI...")
     return ask_gemini_confirmation(video, series, settings)
 
 def main():
@@ -316,14 +365,22 @@ def main():
         save_json(STATE_FILE, {})
 
     config = load_json(CONFIG_FILE, {"series": [], "settings": {}})
+    state = load_json(STATE_FILE, {})
+
+    # 1. Process Telegram Commands first
+    state, config = process_telegram_commands(state, config)
+    
+    # Save immediately so we don't re-process commands if RSS checking crashes
+    save_json(STATE_FILE, state)
+    save_json(CONFIG_FILE, config)
+
+    # 2. Proceed with normal RSS checking
     series_list = config.get("series", [])
     settings = config.get("settings", {})
 
     if not series_list:
-        print("config.json mein koi series nahi mili!")
+        print("No series to track.")
         return
-
-    state = load_json(STATE_FILE, {})
 
     channel_to_series = {}
     for s in series_list:
@@ -335,17 +392,13 @@ def main():
     for ident, series_configs in channel_to_series.items():
         channel_id = resolve_to_channel_id(ident)
         if not channel_id:
-            print(f"Skipping {ident}: Channel ID unresolvable.")
             continue
 
-        print(f"\nChecking RSS feed for: {channel_id} ({ident})")
         videos = fetch_channel_feed(channel_id)
         if not videos:
-            print(f"No videos found or feed empty for {channel_id}")
             continue
 
         if channel_id not in state:
-            print(f"First run for {channel_id}. Seeding {len(videos)} videos without alert.")
             state[channel_id] = [v["id"] for v in videos]
             save_json(STATE_FILE, state)
             continue
@@ -354,17 +407,12 @@ def main():
         new_videos = [v for v in reversed(videos) if v["id"] not in seen_ids]
 
         if not new_videos:
-            print(f"Channel {channel_id} is up to date.")
             continue
 
-        print(f"Found {len(new_videos)} new video(s) for {channel_id}.")
         for vid in new_videos:
-            print(f"\nEvaluating: '{vid['title']}' ({vid['id']})")
-            
             for s in series_configs:
                 is_match, ep_num = check_video_matches_series(vid, s, settings)
                 if is_match:
-                    print(f"  MATCH CONFIRMED! Series: {s['name']}, Target Ep: {ep_num}")
                     thumbnail_url = f"https://i.ytimg.com/vi/{vid['id']}/hqdefault.jpg"
                     caption = get_ai_caption(s["name"], ep_num, vid["title"], vid["link"])
                     send_telegram_alert(thumbnail_url, caption)
