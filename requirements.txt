@@ -1,3 +1,3 @@
-requests
-google-genai
-youtube-transcript-api==0.6.3
+requests==2.34.2
+google-genai==1.55.0
+youtube-transcript-api==1.2.4
