@@ -15,14 +15,11 @@ permissions:
 jobs:
   check-feed:
     runs-on: ubuntu-latest
-    # Hard ceiling so a stuck run can never block the schedule forever.
     timeout-minutes: 10
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          # Shallow clone: `git log -1` still returns the tip commit timestamp,
-          # which is enough for the keepalive check below.
           fetch-depth: 1
 
       - name: Set up Python
@@ -38,8 +35,6 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          # Optional: set this as a repository Variable (Settings → Secrets and variables → Actions → Variables tab).
-          # If unset, main.py falls back to "gemini-3.7-flash".
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
         run: python main.py
 
@@ -49,13 +44,11 @@ jobs:
           git config --global user.email "bot@github.com"
 
           if [ ! -f state.json ]; then
-            echo "::error::state.json does not exist! Failing loud to prevent repeat alerts."
+            echo "::error::state.json does not exist!"
             exit 1
           fi
 
-          # Keepalive: GitHub disables scheduled workflows after 60 days of repo inactivity.
-          # On a shallow clone, `git log -1 --format=%ct` returns the tip commit's unix time.
-          # Only write keepalive.txt if the last commit is older than 45 days.
+          # --- Keepalive Logic ---
           last_commit_ts=$(git log -1 --format=%ct 2>/dev/null || echo 0)
           now_ts=$(date +%s)
           age_days=$(( (now_ts - last_commit_ts) / 86400 ))
@@ -64,22 +57,30 @@ jobs:
             echo "keepalive $(date -u +%Y-%m-%dT%H:%M:%SZ)" > keepalive.txt
           fi
 
+          # --- Stage Files ---
           git add state.json config.json
           if [ -f keepalive.txt ]; then
             git add keepalive.txt
           fi
 
+          # --- Check for Changes ---
           if git diff --staged --quiet; then
-            echo "No state changes detected. Repository is already up to date."
-          else
-            echo "State changes detected. Committing and pushing..."
-            git commit -m "Update state and config [skip ci]"
-
-            git pull --rebase origin main || true
-
-            if ! git push origin main; then
-              echo "::error::CRITICAL: Failed to push to repository! Check branch permissions."
-              exit 1
-            fi
-            echo "State saved and pushed successfully."
+            echo "No state changes."
+            exit 0
           fi
+          
+          git commit -m "Update state and config [skip ci]"
+
+          # --- Retry Loop with Conflict Resolution ---
+          for i in 1 2 3; do
+            if git pull --rebase -X theirs origin main && git push origin main; then
+              echo "State saved."
+              exit 0
+            fi
+            git rebase --abort 2>/dev/null || true
+            echo "Push failed. Retrying in 5 seconds (Attempt $i/3)..."
+            sleep 5
+          done
+          
+          echo "::error::Failed to push state after 3 tries."
+          exit 1
