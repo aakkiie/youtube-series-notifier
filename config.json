@@ -2,5 +2,22 @@
   "settings": {
     "ai_fallback_on_error": "alert"
   },
-  "series": []
+  "series": [
+    {
+      "name": "[Season 1-2 ] Boy Gets a GOD-LEVEL UPGRADE System with 100000x Returns! | Manhwa Recap in Hindi",
+      "channel": "@animenights92",
+      "include_keywords": [
+        "[Season 1-2 ] Boy Gets a GOD-LEVEL UPGRADE System with 100000x Returns! | Manhwa Recap in Hindi"
+      ],
+      "exclude_keywords": [
+        "Shorts",
+        "Trailer",
+        "Teaser",
+        "Preview"
+      ],
+      "last_watched_episode": 0,
+      "check_interval": 1800,
+      "last_check_time": 1793438929.0398502
+    }
+  ]
 }
